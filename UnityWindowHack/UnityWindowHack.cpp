@@ -88,7 +88,7 @@ BOOL CALLBACK UnhackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
 
 static const TCHAR strClassName[] = TEXT("UnityWindowHack");
 
-BOOL IsProgramRegisteredForStartup(PCWSTR pszAppName)
+BOOL IsProgramRegisteredForStartup(PCWSTR pszAppName, PCWSTR pathToExe, PCWSTR args)
 {
     HKEY hKey = NULL;
     LONG lResult = 0;
@@ -109,7 +109,24 @@ BOOL IsProgramRegisteredForStartup(PCWSTR pszAppName)
 
     if (fSuccess)
     {
-        fSuccess = (wcslen(szPathToExe) > 0) ? TRUE : FALSE;
+        const size_t count = MAX_PATH*2;
+        wchar_t szValue[count] = { };
+
+        wcscpy_s(szValue, count, L"\"");
+        wcscat_s(szValue, count, pathToExe);
+        wcscat_s(szValue, count, L"\" ");
+
+        if (args != NULL)
+        {
+            // caller should make sure "args" is quoted if any single argument has a space
+            // e.g. (L"-name \"Mark Voidale\"");
+            wcscat_s(szValue, count, args);
+        }
+
+        size_t lenA = wcslen(szValue);
+        size_t lenB = wcslen(szPathToExe);
+
+        fSuccess = lenA == lenB && wcscmp(szPathToExe, szValue) == 0 ? TRUE : FALSE;
     }
 
     if (hKey != NULL)
@@ -130,7 +147,6 @@ BOOL RegisterMyProgramForStartup(PCWSTR pszAppName, PCWSTR pathToExe, PCWSTR arg
 
     const size_t count = MAX_PATH*2;
     wchar_t szValue[count] = { };
-
 
     wcscpy_s(szValue, count, L"\"");
     wcscat_s(szValue, count, pathToExe);
@@ -171,7 +187,6 @@ BOOL UnregisterMyProgramForStartup(PCWSTR pszAppName)
 void RegisterProgram()
 {
     wchar_t szPathToExe[MAX_PATH];
-
     GetModuleFileNameW(NULL, szPathToExe, MAX_PATH);
     RegisterMyProgramForStartup(strClassName, szPathToExe, L"");
 }
@@ -183,7 +198,9 @@ void UnregisterProgram()
 
 BOOL IsProgramRegistered()
 {
-    return IsProgramRegisteredForStartup(strClassName);
+    wchar_t szPathToExe[MAX_PATH];
+    GetModuleFileNameW(NULL, szPathToExe, MAX_PATH);
+    return IsProgramRegisteredForStartup(strClassName, szPathToExe, L"");
 }
 
 DWORD ToggleRunAtStartup()
