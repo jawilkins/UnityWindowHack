@@ -16,10 +16,6 @@ BOOL CALLBACK HackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
         LONG exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
 
         if (!(style & WS_SYSMENU)) {
-            exStyle &= ~WS_EX_TOOLWINDOW;
-            exStyle |=  WS_EX_APPWINDOW;
-            SetWindowLong(hWnd, GWL_EXSTYLE, exStyle);
-
             TCHAR text[128] = TEXT("");
             HWND hwndChild = NULL;
             bool first = true;
@@ -46,19 +42,13 @@ BOOL CALLBACK HackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
 
             SetWindowText(hWnd, text);
 
-            const static DWORD swpFlags =
-                SWP_ASYNCWINDOWPOS |
-                SWP_DEFERERASE     |
-                SWP_NOACTIVATE     |
-                SWP_NOMOVE         |
-                SWP_NOOWNERZORDER  |
-                SWP_NOREDRAW       |
-                SWP_NOREPOSITION   |
-                SWP_NOSENDCHANGING |
-                SWP_NOSIZE         |
-                SWP_NOZORDER;
-
-            SetWindowPos(hWnd, NULL, 0, 0, 0, 0, swpFlags);
+            if (exStyle & WS_EX_TOOLWINDOW) {
+                ShowWindow(hWnd, SW_HIDE);
+                exStyle &= ~WS_EX_TOOLWINDOW;
+                exStyle |=  WS_EX_APPWINDOW;
+                SetWindowLong(hWnd, GWL_EXSTYLE, exStyle);
+                ShowWindow(hWnd, SW_SHOW);
+            }
         }
     }
 
@@ -76,10 +66,13 @@ BOOL CALLBACK UnhackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
         LONG exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
 
         if (!(style & WS_SYSMENU)) {
+            SetWindowText(hWnd, TEXT(""));
+
+            ShowWindow(hWnd, SW_HIDE);
             exStyle &= ~WS_EX_APPWINDOW;
             exStyle |=  WS_EX_TOOLWINDOW;
             SetWindowLong(hWnd, GWL_EXSTYLE, exStyle);
-            SetWindowText(hWnd, TEXT(""));
+            ShowWindow(hWnd, SW_SHOW);
         }
     }
 
