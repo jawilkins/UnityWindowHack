@@ -227,6 +227,7 @@ LRESULT CALLBACK WindowProc(
         case WM_APP:
             switch(lParam) {
                 case WM_CONTEXTMENU:
+                case WM_LBUTTONUP:
                 case WM_RBUTTONUP:
                 {
                     POINT point;
