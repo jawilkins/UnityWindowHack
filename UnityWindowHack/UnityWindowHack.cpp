@@ -5,6 +5,9 @@
 HMENU     hMenu;
 HINSTANCE hInstance;
 
+BOOL bUnityRunning;
+int  countUnityWindows;
+
 BOOL CALLBACK HackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
 {
     TCHAR className[256];
@@ -12,10 +15,14 @@ BOOL CALLBACK HackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
     GetClassName(hWnd, className, ARRAYSIZE(className));
 
     if (_tcscmp(className, TEXT("UnityContainerWndClass")) == 0) {
+        bUnityRunning = TRUE;
+
         LONG style   = GetWindowLong(hWnd, GWL_STYLE);
         LONG exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
 
         if (!(style & WS_SYSMENU)) {
+            countUnityWindows++;
+
             TCHAR text[128] = TEXT("");
             HWND hwndChild = NULL;
             bool first = true;
@@ -214,8 +221,47 @@ LRESULT CALLBACK WindowProc(
 {
     switch (msg) {
         case WM_TIMER:
+        {
+            BOOL bPrevUnityRunning     = bUnityRunning;
+            int  countPrevUnityWindows = countUnityWindows;
+
+            bUnityRunning     = false;
+            countUnityWindows = 0;
+
             EnumWindows(HackUnityWindow, NULL);
+
+            static NOTIFYICONDATA niData = {};
+
+            if (niData.cbSize == 0) {
+                niData.cbSize           = sizeof(niData);
+                niData.uID              = 0;
+                niData.uFlags           = NIF_ICON|NIF_MESSAGE|NIF_TIP;
+                niData.hIcon            = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_UNITY_WINDOW_HACK));
+                niData.hWnd             = hWnd;
+                niData.uCallbackMessage = WM_APP;
+            }
+
+            if (bPrevUnityRunning     != bUnityRunning     ||
+                countPrevUnityWindows != countUnityWindows ||
+                niData.szTip[0]       == '\0')
+            {
+                if (bUnityRunning)
+                    _stprintf_s(
+                        niData.szTip,
+                        TEXT("Unity Window Hack\n%d window%s hacked."),
+                        countUnityWindows,
+                        countUnityWindows == 1 ? TEXT("") : TEXT("s"));
+                else
+                    _tcscpy_s(
+                        niData.szTip,
+                        TEXT("Unity Window Hack\nUnity not currently running."));
+
+                Shell_NotifyIcon(NIM_DELETE, &niData);
+                Shell_NotifyIcon(NIM_ADD, &niData);
+            }
+
             return 0;
+        }
 
         case WM_APP:
             switch(lParam) {
@@ -300,20 +346,6 @@ int CALLBACK WinMain(
             0,
             hInstance,
             0);
-
-    NOTIFYICONDATA niData;
-    ZeroMemory(&niData, sizeof(niData));
-
-    niData.cbSize           = sizeof(niData);
-    niData.uID              = 0;
-    niData.uFlags           = NIF_ICON|NIF_MESSAGE|NIF_TIP;
-    niData.hIcon            = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_UNITY_WINDOW_HACK));
-    niData.hWnd             = hWnd;
-    niData.uCallbackMessage = WM_APP;
-
-    _tcscpy_s(niData.szTip, TEXT("Unity Window Hack"));
-
-    Shell_NotifyIcon(NIM_ADD, &niData);
 
     SetTimer(hWnd, 1, 100, NULL);
 
