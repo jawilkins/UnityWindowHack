@@ -167,6 +167,9 @@
   <ItemGroup>
     <ResourceCompile Include="UnityWindowHack.rc" />
   </ItemGroup>
+  <ItemGroup>
+    <Image Include="Designcontest-Outline-3D.ico" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
