@@ -1,216 +1,339 @@
 #include "stdafx.h"
 #include "resource.h"
+#include "UnityWindowHack.h"
 
 
-HMENU     hMenu;
-HINSTANCE hInstance;
+static HMENU     m_hMenu;
+static HINSTANCE m_hInstance;
 
-BOOL bUnityRunning;
-int  countUnityWindows;
+static BOOL m_bUnityRunning;
+static int  m_countUnityWindows;
 
-BOOL CALLBACK HackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
+BOOL IsUnityFloatingWindow(HWND hWnd)
 {
     TCHAR className[256];
 
     GetClassName(hWnd, className, ARRAYSIZE(className));
 
     if (_tcscmp(className, TEXT("UnityContainerWndClass")) == 0) {
-        bUnityRunning = TRUE;
+        m_bUnityRunning = TRUE;
 
-        LONG style   = GetWindowLong(hWnd, GWL_STYLE);
-        LONG exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
+        return !(GetWindowLong(hWnd, GWL_STYLE) & WS_SYSMENU);
+    }
+    else {
+        return FALSE;
+    }
+}
 
-        if (!(style & WS_SYSMENU)) {
-            countUnityWindows++;
+void SetAppWindowStyle(HWND hWnd, BOOL bApp)
+{
+    LONG exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
 
-            TCHAR text[128] = TEXT("");
+    if (( bApp && (exStyle & WS_EX_TOOLWINDOW)) ||
+        (!bApp && (exStyle & WS_EX_APPWINDOW )))
+    {
+        const BOOL visible = IsWindowVisible(hWnd);
+
+        if (visible)
+            ShowWindow(hWnd, SW_HIDE);
+
+        if (bApp) {
+            exStyle &= ~WS_EX_TOOLWINDOW;
+            exStyle |=  WS_EX_APPWINDOW;
+        }
+        else {
+            exStyle &= ~WS_EX_APPWINDOW;
+            exStyle |=  WS_EX_TOOLWINDOW;
+        }
+
+        SetWindowLong(hWnd, GWL_EXSTYLE, exStyle);
+
+        if (visible)
+            ShowWindow(hWnd, SW_SHOW);
+    }
+}
+
+BOOL CALLBACK HackUnityWindow(_In_ HWND hWnd, _In_ LPARAM bHack)
+{
+    if (IsUnityFloatingWindow(hWnd)) {
+        m_countUnityWindows++;
+
+        TCHAR text[128] = TEXT("");
+
+        if (bHack) {
             HWND hwndChild = NULL;
             bool first = true;
             for (;;) {
-                hwndChild = FindWindowEx(hWnd, hwndChild, TEXT("UnityGUIViewWndClass"), NULL);
+                hwndChild =
+                    FindWindowEx(
+                        hWnd,
+                        hwndChild,
+                        TEXT("UnityGUIViewWndClass"),
+                        NULL);
 
                 if (!hwndChild)
                     break;
 
                 if (!first)
                     _tcscat_s(text, TEXT(" - "));
+                else
+                    first = false;
 
                 TCHAR childText[128];
                 GetWindowText(hwndChild, childText, 128);
                 TCHAR* name = _tcsstr(childText, TEXT("."));
-
                 _tcscat_s(text, name ? name+1 : childText);
-
-                first = false;
             }
 
             if (text[0] == '\0')
                 _tcscpy_s(text, TEXT("Unity"));
-
-            SetWindowText(hWnd, text);
-
-            if (exStyle & WS_EX_TOOLWINDOW) {
-                ShowWindow(hWnd, SW_HIDE);
-                exStyle &= ~WS_EX_TOOLWINDOW;
-                exStyle |=  WS_EX_APPWINDOW;
-                SetWindowLong(hWnd, GWL_EXSTYLE, exStyle);
-                ShowWindow(hWnd, SW_SHOW);
-            }
         }
+
+        SetWindowText(hWnd, text);
+        SetAppWindowStyle(hWnd, bHack);
     }
 
     return TRUE;
 }
 
-BOOL CALLBACK UnhackUnityWindow(_In_ HWND hWnd, _In_ LPARAM)
+void MakeCommandLine(PTSTR pstrProposedValue, rsize_t count, PCTSTR pstrPathToExe, PCTSTR pstrArgs)
 {
-    TCHAR className[256];
+    _tcscpy_s(pstrProposedValue, count, TEXT("\""));
+    _tcscat_s(pstrProposedValue, count, pstrPathToExe);
+    _tcscat_s(pstrProposedValue, count, TEXT("\""));
 
-    GetClassName(hWnd, className, ARRAYSIZE(className));
-
-    if (_tcscmp(className, TEXT("UnityContainerWndClass")) == 0) {
-        LONG style   = GetWindowLong(hWnd, GWL_STYLE);
-        LONG exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
-
-        if (!(style & WS_SYSMENU)) {
-            SetWindowText(hWnd, TEXT(""));
-
-            ShowWindow(hWnd, SW_HIDE);
-            exStyle &= ~WS_EX_APPWINDOW;
-            exStyle |=  WS_EX_TOOLWINDOW;
-            SetWindowLong(hWnd, GWL_EXSTYLE, exStyle);
-            ShowWindow(hWnd, SW_SHOW);
-        }
+    if (pstrArgs != NULL) {
+        _tcscat_s(pstrProposedValue, count, TEXT(" "));
+        _tcscat_s(pstrProposedValue, count, pstrArgs);
     }
 
-    return TRUE;
 }
 
-static const TCHAR strClassName[] = TEXT("UnityWindowHack");
-
-BOOL IsProgramRegisteredForStartup(PCWSTR pszAppName, PCWSTR pathToExe, PCWSTR args)
+template <rsize_t count>
+inline void MakeCommandLine(TCHAR (&strProposedValue)[count], PCTSTR pstrPathToExe, PCTSTR pstrArgs)
 {
-    HKEY hKey = NULL;
-    LONG lResult = 0;
-    BOOL fSuccess = TRUE;
-    DWORD dwRegType = REG_SZ;
-    wchar_t szPathToExe[MAX_PATH]  = { };
-    DWORD dwSize = sizeof(szPathToExe);
+    MakeCommandLine(strProposedValue, count, pstrPathToExe, pstrArgs);
+}
 
-    lResult = RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey);
+static const TCHAR m_strRunKeyName[] =
+    TEXT("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 
-    fSuccess = (lResult == 0);
+BOOL IsProgramRegisteredForStartup(
+    PCTSTR pstrAppName,
+    PCTSTR pstrPathToExe,
+    PCTSTR pstrArgs)
+{
+    TCHAR strValue[MAX_PATH];
 
-    if (fSuccess)
     {
-        lResult = RegGetValueW(hKey, NULL, pszAppName, RRF_RT_REG_SZ, &dwRegType, szPathToExe, &dwSize);
-        fSuccess = (lResult == 0);
-    }
+        LSTATUS lStatus;
+        HKEY    hKey;
 
-    if (fSuccess)
-    {
-        const size_t count = MAX_PATH*2;
-        wchar_t szValue[count] = { };
+        lStatus =
+            RegOpenKeyEx(
+                HKEY_CURRENT_USER,
+                m_strRunKeyName,
+                0,
+                KEY_READ,
+                &hKey);
 
-        wcscpy_s(szValue, count, L"\"");
-        wcscat_s(szValue, count, pathToExe);
-        wcscat_s(szValue, count, L"\" ");
+        if (lStatus != ERROR_SUCCESS)
+            return FALSE;
 
-        if (args != NULL)
-        {
-            // caller should make sure "args" is quoted if any single argument has a space
-            // e.g. (L"-name \"Mark Voidale\"");
-            wcscat_s(szValue, count, args);
-        }
+        DWORD dwRegType = REG_SZ;
+        DWORD dwSize    = sizeof(strValue);
 
-        size_t lenA = wcslen(szValue);
-        size_t lenB = wcslen(szPathToExe);
+        lStatus =
+            RegGetValue(
+                hKey,
+                NULL,
+                pstrAppName,
+                RRF_RT_REG_SZ,
+                &dwRegType,
+                strValue,
+                &dwSize);
 
-        fSuccess = lenA == lenB && wcscmp(szPathToExe, szValue) == 0 ? TRUE : FALSE;
-    }
-
-    if (hKey != NULL)
-    {
         RegCloseKey(hKey);
-        hKey = NULL;
+
+        if (lStatus != ERROR_SUCCESS)
+            return FALSE;
     }
 
-    return fSuccess;
+    TCHAR strProposedValue[2*MAX_PATH];
+    MakeCommandLine(strProposedValue, pstrPathToExe, pstrArgs);
+    return _tcscmp(strValue, strProposedValue) == 0;
 }
 
-BOOL RegisterMyProgramForStartup(PCWSTR pszAppName, PCWSTR pathToExe, PCWSTR args)
+BOOL RegisterProgramForStartup(PCTSTR pstrAppName, PCTSTR pstrPathToExe, PCTSTR pstrArgs)
 {
-    HKEY hKey = NULL;
-    LONG lResult = 0;
-    BOOL fSuccess = TRUE;
-    DWORD dwSize;
+    HKEY hKey;
+    LSTATUS lStatus;
 
-    const size_t count = MAX_PATH*2;
-    wchar_t szValue[count] = { };
+    lStatus =
+        RegCreateKeyEx(
+            HKEY_CURRENT_USER,
+            m_strRunKeyName,
+            0,
+            NULL,
+            0,
+            (KEY_WRITE | KEY_READ),
+            NULL,
+            &hKey,
+            NULL);
 
-    wcscpy_s(szValue, count, L"\"");
-    wcscat_s(szValue, count, pathToExe);
-    wcscat_s(szValue, count, L"\" ");
+    if (lStatus != ERROR_SUCCESS)
+        return FALSE;
 
-    if (args != NULL)
-    {
-        // caller should make sure "args" is quoted if any single argument has a space
-        // e.g. (L"-name \"Mark Voidale\"");
-        wcscat_s(szValue, count, args);
-    }
+    TCHAR strProposedValue[2*MAX_PATH];
+    MakeCommandLine(strProposedValue, pstrPathToExe, pstrArgs);
 
-    lResult = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, NULL, 0, (KEY_WRITE | KEY_READ), NULL, &hKey, NULL);
+    DWORD dwSize = sizeof(TCHAR)*(_tcslen(strProposedValue)+1);
 
-    fSuccess = (lResult == 0);
+    lStatus =
+        RegSetValueEx(
+            hKey,
+            pstrAppName,
+            0,
+            REG_SZ,
+            reinterpret_cast<BYTE*>(strProposedValue),
+            dwSize);
 
-    if (fSuccess)
-    {
-        dwSize = (wcslen(szValue)+1)*2;
-        lResult = RegSetValueExW(hKey, pszAppName, 0, REG_SZ, (BYTE*)szValue, dwSize);
-        fSuccess = (lResult == 0);
-    }
+    RegCloseKey(hKey);
 
-    if (hKey != NULL)
-    {
-        RegCloseKey(hKey);
-        hKey = NULL;
-    }
-
-    return fSuccess;
+    return lStatus == ERROR_SUCCESS;
 }
 
-BOOL UnregisterMyProgramForStartup(PCWSTR pszAppName)
+BOOL UnregisterProgramForStartup(PCTSTR pstrAppName)
 {
-    return 0 == RegDeleteKeyValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", pszAppName);
+    LSTATUS lStatus =
+        RegDeleteKeyValue(
+            HKEY_CURRENT_USER,
+            m_strRunKeyName,
+            pstrAppName);
+
+    return lStatus == ERROR_SUCCESS;
+}
+
+static const TCHAR m_strClassName[] = TEXT("UnityWindowHack");
+
+static TCHAR m_strPathToExe[MAX_PATH];
+
+void InitRegisterProgram()
+{
+    GetModuleFileName(NULL, m_strPathToExe, ARRAYSIZE(m_strPathToExe));
 }
 
 void RegisterProgram()
 {
-    wchar_t szPathToExe[MAX_PATH];
-    GetModuleFileNameW(NULL, szPathToExe, MAX_PATH);
-    RegisterMyProgramForStartup(strClassName, szPathToExe, L"");
+    RegisterProgramForStartup(m_strClassName, m_strPathToExe, NULL);
 }
 
 void UnregisterProgram()
 {
-    UnregisterMyProgramForStartup(strClassName);
+    UnregisterProgramForStartup(m_strClassName);
 }
 
 BOOL IsProgramRegistered()
 {
-    wchar_t szPathToExe[MAX_PATH];
-    GetModuleFileNameW(NULL, szPathToExe, MAX_PATH);
-    return IsProgramRegisteredForStartup(strClassName, szPathToExe, L"");
+    return IsProgramRegisteredForStartup(m_strClassName, m_strPathToExe, NULL);
 }
 
-DWORD ToggleRunAtStartup()
+void ToggleRunAtStartup()
 {
     if (!IsProgramRegistered())
         RegisterProgram();
     else
         UnregisterProgram();
+}
 
-    return IsProgramRegistered() ? MF_CHECKED : MF_UNCHECKED;
+inline void UpdateRunAtStartupCheck()
+{
+    const UINT check =
+        IsProgramRegistered() ? MF_CHECKED : MF_UNCHECKED;
+
+    CheckMenuItem(
+        m_hMenu,
+        ID_CONTEXTMENU_RUNATSTARTUP,
+        check);
+}
+
+static NOTIFYICONDATA m_niData;
+
+void UpdateTooltip()
+{
+    if (m_bUnityRunning)
+        _stprintf_s(
+            m_niData.szTip,
+            TEXT("Unity Window Hack\n%d window%s hacked."),
+            m_countUnityWindows,
+            m_countUnityWindows == 1 ? TEXT("") : TEXT("s"));
+    else
+        _tcscpy_s(
+            m_niData.szTip,
+            TEXT("Unity Window Hack\nUnity not detected."));
+}
+
+void AddNotificationIcon()
+{
+    UpdateTooltip();
+    Shell_NotifyIcon(NIM_ADD, &m_niData);
+}
+
+const static UINT uID = 1;
+
+void InitNotificationIcon(HWND hWnd)
+{
+    m_niData.cbSize           = sizeof(m_niData);
+    m_niData.uVersion         = NOTIFYICON_VERSION_4;
+    m_niData.uID              = uID;
+    m_niData.uFlags           = NIF_ICON|NIF_MESSAGE|NIF_TIP|NIF_SHOWTIP;
+    m_niData.hIcon            = LoadIcon(m_hInstance, MAKEINTRESOURCE(IDI_UNITY_WINDOW_HACK));
+    m_niData.hWnd             = hWnd;
+    m_niData.uCallbackMessage = WM_APP;
+
+    AddNotificationIcon();
+    Shell_NotifyIcon(NIM_SETVERSION, &m_niData);
+}
+
+void UpdateNotificationIcon()
+{
+    UpdateTooltip();
+    Shell_NotifyIcon(NIM_MODIFY, &m_niData);
+}
+
+static BOOL bPrevUnityRunning;
+static int  countPrevUnityWindows;
+
+void HackUnityWindows()
+{
+    bPrevUnityRunning     = m_bUnityRunning;
+    countPrevUnityWindows = m_countUnityWindows;
+
+    m_bUnityRunning     = false;
+    m_countUnityWindows = 0;
+
+    EnumWindows(HackUnityWindow, TRUE);
+}
+
+BOOL StatusChanged()
+{
+    return bPrevUnityRunning     != m_bUnityRunning     ||
+           countPrevUnityWindows != m_countUnityWindows ||
+           m_niData.szTip[0]       == '\0';
+}
+
+void About(HWND hWnd)
+{
+    MessageBox(
+        hWnd,
+        TEXT(
+            "This program forces floating Unity3D windows\n"
+            "to have entries on the taskbar.\n"
+            "\n"
+            "License for application Icon Creative Commons Attribution 3.0\n"
+            "https://www.designcontest.com/free-outline-icons/"),
+        TEXT("Unity Window Hack"),
+        MB_OK);
 }
 
 LRESULT CALLBACK WindowProc(
@@ -222,87 +345,73 @@ LRESULT CALLBACK WindowProc(
     switch (msg) {
         case WM_TIMER:
         {
-            BOOL bPrevUnityRunning     = bUnityRunning;
-            int  countPrevUnityWindows = countUnityWindows;
+            HackUnityWindows();
 
-            bUnityRunning     = false;
-            countUnityWindows = 0;
-
-            EnumWindows(HackUnityWindow, NULL);
-
-            static NOTIFYICONDATA niData = {};
-
-            if (niData.cbSize == 0) {
-                niData.cbSize           = sizeof(niData);
-                niData.uID              = 0;
-                niData.uFlags           = NIF_ICON|NIF_MESSAGE|NIF_TIP;
-                niData.hIcon            = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_UNITY_WINDOW_HACK));
-                niData.hWnd             = hWnd;
-                niData.uCallbackMessage = WM_APP;
-            }
-
-            if (bPrevUnityRunning     != bUnityRunning     ||
-                countPrevUnityWindows != countUnityWindows ||
-                niData.szTip[0]       == '\0')
-            {
-                if (bUnityRunning)
-                    _stprintf_s(
-                        niData.szTip,
-                        TEXT("Unity Window Hack\n%d window%s hacked."),
-                        countUnityWindows,
-                        countUnityWindows == 1 ? TEXT("") : TEXT("s"));
-                else
-                    _tcscpy_s(
-                        niData.szTip,
-                        TEXT("Unity Window Hack\nUnity not currently running."));
-
-                Shell_NotifyIcon(NIM_DELETE, &niData);
-                Shell_NotifyIcon(NIM_ADD, &niData);
-            }
+            if (StatusChanged())
+                UpdateNotificationIcon();
 
             return 0;
         }
+        break;
 
         case WM_APP:
-            switch(lParam) {
+        {
+            if (HIWORD(lParam) != uID)
+                return DefWindowProc(hWnd, msg, wParam, lParam);
+
+            switch (LOWORD(lParam)) {
+                case NIN_KEYSELECT:
+                case NIN_SELECT:
                 case WM_CONTEXTMENU:
-                case WM_LBUTTONUP:
-                case WM_RBUTTONUP:
                 {
                     POINT point;
-                    GetCursorPos(&point);
+                    point.x = GET_X_LPARAM(wParam);
+                    point.y = GET_Y_LPARAM(wParam);
+
                     SetForegroundWindow(hWnd);
-                    TrackPopupMenuEx(hMenu, TPM_RIGHTBUTTON, point.x, point.y, hWnd, NULL);
+
+                    const int cmd =
+                        TrackPopupMenuEx(
+                            m_hMenu,
+                            TPM_RIGHTBUTTON|TPM_RETURNCMD,
+                            point.x,
+                            point.y,
+                            hWnd,
+                            NULL);
+
+                    if (cmd == 0)
+                        Shell_NotifyIcon(NIM_SETFOCUS, &m_niData);
+                    else
+                        PostMessage(hWnd, WM_COMMAND, cmd, 0);
+
                     PostMessage(hWnd, WM_NULL, 0, 0);
+
                     return 0;
                 }
                 default:
                     return DefWindowProc(hWnd, msg, wParam, lParam);
             }
+        }
+        break;
 
         case WM_COMMAND:
-            switch(LOWORD(wParam)) {
-                case ID_CONTEXTMENU_RUNATSTARTUP:
-                    CheckMenuItem(hMenu, ID_CONTEXTMENU_RUNATSTARTUP, ToggleRunAtStartup());
-                    return 0;
+        {
+            switch (LOWORD(wParam)) {
                 case ID_CONTEXTMENU_ABOUT:
-                    MessageBox(
-                        hWnd,
-                        TEXT(
-                            "This program forces floating Unity3D windows\n"
-                            "to have entries on the taskbar.\n"
-                            "\n"
-                            "License for application Icon Creative Commons Attribution 3.0\n"
-                            "https://www.designcontest.com/free-outline-icons/"),
-                        TEXT("Unity Window Hack"),
-                        MB_OK);
+                    About(hWnd);
                     return 0;
-                case ID_EXIT:
+                case ID_CONTEXTMENU_RUNATSTARTUP:
+                    ToggleRunAtStartup();
+                    UpdateRunAtStartupCheck();
+                    return 0;
+                case ID_CONTEXTMENU_EXIT:
                     PostQuitMessage(0);
                     return 0;
                 default:
                     return DefWindowProc(hWnd, msg, wParam, lParam);
             }
+        }
+        break;
 
         default:
             return DefWindowProc(hWnd, msg, wParam, lParam);
@@ -311,41 +420,44 @@ LRESULT CALLBACK WindowProc(
 
 void Shutdown()
 {
-    EnumWindows(UnhackUnityWindow, NULL);
+    EnumWindows(HackUnityWindow, FALSE);
 }
 
 int CALLBACK WinMain(
-    _In_ HINSTANCE hCurrentInstance,
+    _In_ HINSTANCE hInstance,
     _In_ HINSTANCE,
     _In_ LPSTR,
     _In_ int)
 {
-    hInstance = hCurrentInstance;
+    InitRegisterProgram();
 
-    hMenu = LoadMenu(hInstance, MAKEINTRESOURCE(IDR_MENU));
-    hMenu = GetSubMenu(hMenu, 0);
+    m_hInstance = hInstance;
 
-    CheckMenuItem(hMenu, ID_CONTEXTMENU_RUNATSTARTUP, IsProgramRegistered() ? MF_CHECKED : MF_UNCHECKED);
+    m_hMenu = LoadMenu(m_hInstance, MAKEINTRESOURCE(IDR_MENU));
+    m_hMenu = GetSubMenu(m_hMenu, 0);
+    UpdateRunAtStartupCheck();
 
     WNDCLASS wndClass;
     ZeroMemory(&wndClass, sizeof(wndClass));
 
-    wndClass.hInstance     = hInstance;
+    wndClass.hInstance     = m_hInstance;
     wndClass.lpfnWndProc   = WindowProc;
-    wndClass.lpszClassName = strClassName;
+    wndClass.lpszClassName = m_strClassName;
 
     RegisterClass(&wndClass);
 
     HWND hWnd =
         CreateWindow(
-            strClassName,
+            m_strClassName,
             TEXT("Unity Window Hack"),
             0,
             0, 0, 0, 0,
             HWND_MESSAGE,
             0,
-            hInstance,
+            m_hInstance,
             0);
+
+    InitNotificationIcon(hWnd);
 
     SetTimer(hWnd, 1, 100, NULL);
 
